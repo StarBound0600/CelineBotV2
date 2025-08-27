@@ -1,0 +1,11 @@
+{
+    "Barista": {"chance": 1.0, "min": 50, "max": 150},
+    "Receptionist": {"chance": 0.95, "min": 80, "max": 200},
+    "Farmer": {"chance": 0.90, "min": 100, "max": 250},
+    "Delivery Driver": {"chance": 0.85, "min": 120, "max": 300},
+    "Streamer": {"chance": 0.80, "min": 150, "max": 400},
+    "Musician": {"chance": 0.80, "min": 200, "max": 500},
+    "Influencer": {"chance": 0.70, "min": 250, "max": 600},
+    "Lawyer": {"chance": 0.60, "min": 600, "max": 1200},
+    "Astronaut": {"chance": 0.40, "min": 2000, "max": 4000}
+}
