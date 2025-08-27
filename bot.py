@@ -77,22 +77,24 @@ async def joblist_command(interaction: discord.Interaction):
         jobs_text += f"**{job}** - Chance: {info['chance']*100:.0f}%, Earnings: {info['min']}-{info['max']} coins\n"
     await interaction.response.send_message(f"**Available Jobs:**\n{jobs_text}")
 
-@tree.command(name="celine_apply", description="Apply for a job")
-async def apply(interaction: discord.Interaction):
+@tree.command(name="celine_apply", description="Apply for a specific job")
+@app_commands.describe(job="The job you want to apply for")
+async def apply(interaction: discord.Interaction, job: str):
     user = get_user_data(interaction.user.id)
     if user["job"]:
         await interaction.response.send_message(f"You already have a job as {user['job']}.")
         return
 
-    roll = random.random()
-    for job, info in jobs.items():
-        if roll <= info["chance"]:
-            user["job"] = job
-            save_data()
-            await assign_job_role(interaction.user, job)
-            await interaction.response.send_message(f"You got the job: {job}!")
-            return
-    await interaction.response.send_message("No job this time. Try again later!")
+    job = job.title()  # normalize input, e.g., "lawyer" → "Lawyer"
+    if job not in jobs:
+        await interaction.response.send_message(f"{job} is not a valid job. Check /celine_joblist.")
+        return
+
+    # Assign job and role
+    user["job"] = job
+    save_data()
+    await assign_job_role(interaction.user, job)
+    await interaction.response.send_message(f"You got the job: {job}!")
 
 @tree.command(name="celine_work", description="Work your job to earn coins")
 async def work(interaction: discord.Interaction):
