@@ -1,187 +1,164 @@
-import os
+import discord
+from discord import app_commands
+from discord.ext import commands
 import json
 import random
 import asyncio
-import discord
-from discord.ext import commands
-from discord import app_commands
+import os
 from datetime import datetime, timedelta
 
-# --- BOT SETUP ---
+# --- CONFIG ---
 intents = discord.Intents.default()
-intents.guilds = True       # Required for slash commands
-intents.members = False     # DISABLED to avoid privileged intents error
-intents.message_content = False  # Not needed for slash commands
-
+intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
 
-# --- DATA FILES ---
-DATA_FILE = "data.json"
-SHOP_FILE = "shop.json"
-JOBS_FILE = "jobs.json"
-CONFIG_FILE = "config.json"
+# --- LOAD FILES ---
+with open("config.json") as f:
+    config = json.load(f)
 
-data_lock = asyncio.Lock()
+with open("data.json") as f:
+    user_data = json.load(f)
 
-# --- LOAD / SAVE HELPERS ---
-def load_json(file, default):
-    if not os.path.exists(file):
-        with open(file, "w") as f:
-            json.dump(default, f, indent=4)
-    with open(file, "r") as f:
-        return json.load(f)
+with open("jobs.json") as f:
+    jobs = json.load(f)
 
-def save_json(file, content):
-    with open(file, "w") as f:
-        json.dump(content, f, indent=4)
+with open("shop.json") as f:
+    shop = json.load(f)
 
-# --- INITIALIZE FILES ---
-shop = load_json(SHOP_FILE, {
-    "Coffee": 50, "Bicycle": 500, "Laptop": 1200,
-    "Smartphone": 1000, "Washing Machine": 2000,
-    "TV": 1500, "Refrigerator": 2500, "Microwave": 400,
-    "Sofa": 1800, "Bed": 2200, "Car": 10000,
-    "Motorcycle": 7000, "Diamond Ring": 25000,
-    "Yacht": 100000, "Mansion": 500000
-})
+WORK_COOLDOWN = timedelta(hours=6)
+DAILY_COOLDOWN = timedelta(hours=24)
 
-jobs = load_json(JOBS_FILE, {
-    "Barista": {"chance": 1.0, "min": 50, "max": 150},
-    "Receptionist": {"chance": 0.95, "min": 80, "max": 200},
-    "Farmer": {"chance": 0.90, "min": 100, "max": 250},
-    "Delivery Driver": {"chance": 0.85, "min": 120, "max": 300},
-    "Streamer": {"chance": 0.80, "min": 150, "max": 400},
-    "Musician": {"chance": 0.80, "min": 200, "max": 500},
-    "Influencer": {"chance": 0.70, "min": 250, "max": 600},
-    "Lawyer": {"chance": 0.60, "min": 600, "max": 1200},
-    "Astronaut": {"chance": 0.40, "min": 2000, "max": 4000}
-})
+# --- HELPER FUNCTIONS ---
+def save_data():
+    with open("data.json", "w") as f:
+        json.dump(user_data, f, indent=4)
 
-config = load_json(CONFIG_FILE, {
-    "work_cooldown": 21600,  # 6h
-    "daily_cooldown": 86400  # 24h
-})
-
-data = load_json(DATA_FILE, {})
-
-# --- UTILITIES ---
-async def get_user_data(user_id):
-    async with data_lock:
-        if str(user_id) not in data:
-            data[str(user_id)] = {"balance": 0, "job": None, "last_work": 0, "last_daily": 0, "inventory": []}
-            save_json(DATA_FILE, data)
-        return data[str(user_id)]
-
-async def update_user_data(user_id, key, value):
-    async with data_lock:
-        data[str(user_id)][key] = value
-        save_json(DATA_FILE, data)
+def get_user_data(user_id):
+    if str(user_id) not in user_data:
+        user_data[str(user_id)] = {
+            "coins": 0,
+            "job": None,
+            "last_work": None,
+            "last_daily": None,
+            "inventory": {}
+        }
+    return user_data[str(user_id)]
 
 # --- COMMANDS ---
-@tree.command(name="celine_job", description="Apply for a job")
-@app_commands.describe(job="Job you want to apply for")
-async def job_command(interaction: discord.Interaction, job: str):
-    job = job.title()
-    if job not in jobs:
-        await interaction.response.send_message(f"❌ Job '{job}' does not exist.")
+@tree.command(name="joblist", description="Show all available jobs and chances")
+async def joblist_command(interaction: discord.Interaction):
+    jobs_text = "\n".join([f"{job}: {chance*100:.0f}%" for job, chance in jobs.items()])
+    await interaction.response.send_message(f"**Available Jobs:**\n{jobs_text}")
+
+@tree.command(name="apply", description="Apply for a job")
+async def apply(interaction: discord.Interaction):
+    user = get_user_data(interaction.user.id)
+    if user["job"]:
+        await interaction.response.send_message(f"You already have a job as {user['job']}.")
         return
-    chance = jobs[job]["chance"]
+
     roll = random.random()
-    if roll <= chance:
-        await update_user_data(interaction.user.id, "job", job)
-        await interaction.response.send_message(f"✅ Congrats {interaction.user.mention}, you got the job as **{job}**!")
-    else:
-        await interaction.response.send_message(f"😞 Sorry {interaction.user.mention}, you didn’t get the **{job}** job. Try again later!")
+    for job, chance in jobs.items():
+        if roll <= chance:
+            user["job"] = job
+            save_data()
+            await interaction.response.send_message(f"You got the job: {job}!")
+            return
+    await interaction.response.send_message("No job this time. Try again later!")
 
-@tree.command(name="celine_work", description="Work your job and earn coins")
-async def work_command(interaction: discord.Interaction):
-    user = await get_user_data(interaction.user.id)
-    job = user["job"]
-    if not job:
-        await interaction.response.send_message("❌ You don’t have a job. Use `/celine_job` first.")
+@tree.command(name="work", description="Work your job to earn coins")
+async def work(interaction: discord.Interaction):
+    user = get_user_data(interaction.user.id)
+    if not user["job"]:
+        await interaction.response.send_message("You don't have a job! Apply first with `/celine_apply`.")
         return
 
-    now = datetime.utcnow().timestamp()
-    if now - user["last_work"] < config["work_cooldown"]:
-        wait = timedelta(seconds=int(config["work_cooldown"] - (now - user["last_work"])))
-        await interaction.response.send_message(f"⏳ You must wait {wait} before working again.")
-        return
+    last_work = user["last_work"]
+    if last_work:
+        cooldown_remaining = datetime.fromisoformat(last_work) + WORK_COOLDOWN - datetime.utcnow()
+        if cooldown_remaining.total_seconds() > 0:
+            await interaction.response.send_message(f"You are on cooldown for {str(cooldown_remaining).split('.')[0]}.")
+            return
 
-    pay = random.randint(jobs[job]["min"], jobs[job]["max"])
-    await update_user_data(interaction.user.id, "balance", user["balance"] + pay)
-    await update_user_data(interaction.user.id, "last_work", now)
+    earnings = random.randint(50, 150)
+    user["coins"] += earnings
+    user["last_work"] = datetime.utcnow().isoformat()
+    save_data()
+    await interaction.response.send_message(f"{interaction.user.mention}, you worked as a {user['job']} and earned {earnings} coins!")
 
-    await interaction.response.send_message(f"💼 {interaction.user.mention}, you worked as a **{job}** and earned **{pay} coins**!")
+@tree.command(name="daily", description="Claim your daily coins")
+async def daily(interaction: discord.Interaction):
+    user = get_user_data(interaction.user.id)
+    last_daily = user["last_daily"]
+    if last_daily:
+        cooldown_remaining = datetime.fromisoformat(last_daily) + DAILY_COOLDOWN - datetime.utcnow()
+        if cooldown_remaining.total_seconds() > 0:
+            await interaction.response.send_message(f"You have already claimed daily. Come back in {str(cooldown_remaining).split('.')[0]}.")
+            return
 
-@tree.command(name="celine_daily", description="Claim your daily bonus")
-async def daily_command(interaction: discord.Interaction):
-    user = await get_user_data(interaction.user.id)
-    now = datetime.utcnow().timestamp()
-    if now - user["last_daily"] < config["daily_cooldown"]:
-        wait = timedelta(seconds=int(config["daily_cooldown"] - (now - user["last_daily"])))
-        await interaction.response.send_message(f"⏳ You must wait {wait} before claiming daily again.")
-        return
-    bonus = 500
-    await update_user_data(interaction.user.id, "balance", user["balance"] + bonus)
-    await update_user_data(interaction.user.id, "last_daily", now)
-    await interaction.response.send_message(f"🎁 {interaction.user.mention}, you claimed your daily bonus of **{bonus} coins**!")
+    earnings = random.randint(100, 300)
+    user["coins"] += earnings
+    user["last_daily"] = datetime.utcnow().isoformat()
+    save_data()
+    await interaction.response.send_message(f"{interaction.user.mention}, you claimed {earnings} coins for your daily reward!")
 
-@tree.command(name="celine_balance", description="Check your balance")
-async def balance_command(interaction: discord.Interaction):
-    user = await get_user_data(interaction.user.id)
-    await interaction.response.send_message(f"💰 {interaction.user.mention}, you have **{user['balance']} coins**.")
+@tree.command(name="balance", description="Check your coin balance")
+async def balance(interaction: discord.Interaction):
+    user = get_user_data(interaction.user.id)
+    await interaction.response.send_message(f"{interaction.user.mention}, you have {user['coins']} coins.")
 
-@tree.command(name="celine_shop", description="View items in the shop")
+@tree.command(name="leaderboard", description="Show the richest users")
+async def leaderboard(interaction: discord.Interaction):
+    sorted_users = sorted(user_data.items(), key=lambda x: x[1]["coins"], reverse=True)
+    top = sorted_users[:10]
+    message = "**Leaderboard:**\n"
+    for i, (uid, info) in enumerate(top, start=1):
+        member = interaction.guild.get_member(int(uid))
+        name = member.name if member else f"User {uid}"
+        message += f"{i}. {name}: {info['coins']} coins\n"
+    await interaction.response.send_message(message)
+
+@tree.command(name="shop", description="Show items in the shop")
 async def shop_command(interaction: discord.Interaction):
-    msg = "🛒 **Shop Items:**\n" + "\n".join([f"- {item}: {price} coins" for item, price in shop.items()])
-    await interaction.response.send_message(msg)
+    message = "**Shop Items:**\n"
+    for item, price in shop.items():
+        message += f"{item}: {price} coins\n"
+    await interaction.response.send_message(message)
 
-@tree.command(name="celine_buy", description="Buy an item from the shop")
-@app_commands.describe(item="Item to buy")
-async def buy_command(interaction: discord.Interaction, item: str):
-    item = item.title()
+@tree.command(name="buy", description="Buy an item from the shop")
+@app_commands.describe(item="The item you want to buy")
+async def buy(interaction: discord.Interaction, item: str):
+    user = get_user_data(interaction.user.id)
     if item not in shop:
-        await interaction.response.send_message("❌ That item is not in the shop.")
+        await interaction.response.send_message("This item does not exist.")
         return
-    user = await get_user_data(interaction.user.id)
     price = shop[item]
-    if user["balance"] < price:
-        await interaction.response.send_message("❌ You don’t have enough coins.")
+    if user["coins"] < price:
+        await interaction.response.send_message("You don't have enough coins.")
         return
-    user["balance"] -= price
-    user["inventory"].append(item)
-    await update_user_data(interaction.user.id, "balance", user["balance"])
-    await update_user_data(interaction.user.id, "inventory", user["inventory"])
-    await interaction.response.send_message(f"✅ You bought **{item}** for {price} coins!")
+    user["coins"] -= price
+    user["inventory"][item] = user["inventory"].get(item, 0) + 1
+    save_data()
+    await interaction.response.send_message(f"You bought {item}!")
 
-@tree.command(name="celine_inventory", description="Check your inventory")
-async def inventory_command(interaction: discord.Interaction):
-    user = await get_user_data(interaction.user.id)
-    if not user["inventory"]:
-        await interaction.response.send_message("🎒 Your inventory is empty.")
+# --- NEW INVENTORY COMMAND ---
+@tree.command(name="inventory", description="Check your items")
+async def inventory(interaction: discord.Interaction):
+    user = get_user_data(interaction.user.id)
+    inventory = user["inventory"]
+    if not inventory:
+        await interaction.response.send_message("You have no items in your inventory.")
         return
-    items = {}
-    for i in user["inventory"]:
-        items[i] = items.get(i, 0) + 1
-    msg = "🎒 **Your Inventory:**\n" + "\n".join([f"- {itm} x{cnt}" for itm, cnt in items.items()])
-    await interaction.response.send_message(msg)
+    message = "**Your Inventory:**\n"
+    for item, amount in inventory.items():
+        message += f"{item}: {amount}\n"
+    await interaction.response.send_message(message)
 
-@tree.command(name="celine_leaderboard", description="Top 10 richest users")
-async def leaderboard_command(interaction: discord.Interaction):
-    top = sorted(data.items(), key=lambda x: x[1]["balance"], reverse=True)[:10]
-    msg = "🏆 **Leaderboard:**\n"
-    for i, (uid, info) in enumerate(top, 1):
-        user = bot.get_user(int(uid))
-        name = user.name if user else f"User {uid}"
-        msg += f"{i}. {name} — {info['balance']} coins\n"
-    await interaction.response.send_message(msg)
-
-# --- BOT READY ---
+# --- START BOT ---
 @bot.event
 async def on_ready():
+    print(f"Logged in as {bot.user}")
     await tree.sync()
-    print(f"✅ Logged in as {bot.user}")
 
-# --- RUN ---
 bot.run(os.getenv("DISCORD_TOKEN"))
