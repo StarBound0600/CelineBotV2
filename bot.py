@@ -7,10 +7,10 @@ import asyncio
 import os
 from datetime import datetime, timedelta
 
-# --- CONFIG --- 
+# --- CONFIG ---
 intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True  # Required for role assignment
+intents.message_content = True  # For commands to read content
+intents.members = True          # For assigning roles
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
 
@@ -47,9 +47,13 @@ def get_user_data(user_id):
     return user_data[str(user_id)]
 
 async def assign_job_role(member: discord.Member, job_name: str):
-    role = discord.utils.get(member.guild.roles, name=job_name)
-    if role:
-        await member.add_roles(role)
+    """Assign a job role; auto-create it if it doesn’t exist."""
+    guild = member.guild
+    role = discord.utils.get(guild.roles, name=job_name)
+    if not role:
+        # Create role with default permissions
+        role = await guild.create_role(name=job_name)
+    await member.add_roles(role)
 
 # --- COMMANDS ---
 @tree.command(name="celine_joblist", description="Show all available jobs with chances and earnings")
