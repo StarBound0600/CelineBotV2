@@ -3,36 +3,49 @@ from discord import app_commands
 from discord.ext import commands
 import json
 import random
-import asyncio
 import os
 from datetime import datetime, timedelta
 
 # --- CONFIG ---
+DATA_PATH = "/opt/render/project/data/CelineBotV2/data.json"
+JOBS_PATH = "/opt/render/project/data/CelineBotV2/jobs.json"
+SHOP_PATH = "/opt/render/project/data/CelineBotV2/shop.json"
+
 intents = discord.Intents.default()
-intents.message_content = True  # For commands to read content
-intents.members = True          # For assigning roles
+intents.message_content = True
+intents.members = True  # Needed for role assignment
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
 
+
 # --- LOAD FILES ---
-with open("config.json") as f:
-    config = json.load(f)
+# User save data
+if os.path.exists(DATA_PATH):
+    with open(DATA_PATH, "r") as f:
+        user_data = json.load(f)
+else:
+    user_data = {}
 
-with open("data.json") as f:
-    user_data = json.load(f)
+# Jobs
+if os.path.exists(JOBS_PATH):
+    with open(JOBS_PATH, "r") as f:
+        jobs = json.load(f)
+else:
+    jobs = {}
 
-with open("jobs.json") as f:
-    jobs = json.load(f)
-
-with open("shop.json") as f:
-    shop = json.load(f)
+# Shop
+if os.path.exists(SHOP_PATH):
+    with open(SHOP_PATH, "r") as f:
+        shop = json.load(f)
+else:
+    shop = {}
 
 WORK_COOLDOWN = timedelta(hours=6)
 DAILY_COOLDOWN = timedelta(hours=24)
 
-# --- HELPER FUNCTIONS ---
+# --- HELPERS ---
 def save_data():
-    with open("data.json", "w") as f:
+    with open(DATA_PATH, "w") as f:
         json.dump(user_data, f, indent=4)
 
 def get_user_data(user_id):
@@ -47,17 +60,18 @@ def get_user_data(user_id):
     return user_data[str(user_id)]
 
 async def assign_job_role(member: discord.Member, job_name: str):
-    """Assign a job role; auto-create it if it doesn’t exist."""
     guild = member.guild
     role = discord.utils.get(guild.roles, name=job_name)
     if not role:
-        # Create role with default permissions
         role = await guild.create_role(name=job_name)
     await member.add_roles(role)
 
 # --- COMMANDS ---
 @tree.command(name="celine_joblist", description="Show all available jobs with chances and earnings")
 async def joblist_command(interaction: discord.Interaction):
+    if not jobs:
+        await interaction.response.send_message("No jobs available. Ask the admin to add some in jobs.json.")
+        return
     jobs_text = ""
     for job, info in jobs.items():
         jobs_text += f"**{job}** - Chance: {info['chance']*100:.0f}%, Earnings: {info['min']}-{info['max']} coins\n"
@@ -108,7 +122,7 @@ async def daily(interaction: discord.Interaction):
     if last_daily:
         cooldown_remaining = datetime.fromisoformat(last_daily) + DAILY_COOLDOWN - datetime.utcnow()
         if cooldown_remaining.total_seconds() > 0:
-            await interaction.response.send_message(f"You have already claimed daily. Come back in {str(cooldown_remaining).split('.')[0]}.")
+            await interaction.response.send_message(f"You already claimed daily. Come back in {str(cooldown_remaining).split('.')[0]}.")
             return
 
     earnings = random.randint(100, 300)
@@ -135,6 +149,9 @@ async def leaderboard(interaction: discord.Interaction):
 
 @tree.command(name="celine_shop", description="Show items in the shop")
 async def shop_command(interaction: discord.Interaction):
+    if not shop:
+        await interaction.response.send_message("The shop is empty. Ask the admin to add items in shop.json.")
+        return
     message = "**Shop Items:**\n"
     for item, info in shop.items():
         message += f"{item}: {info['price']} coins - {info['description']}\n"
@@ -164,6 +181,21 @@ async def inventory(interaction: discord.Interaction):
         return
     items = "\n".join([f"{item}: {amount}" for item, amount in user["inventory"].items()])
     await interaction.response.send_message(f"**Inventory:**\n{items}")
+
+@tree.command(name="celine_gift", description="Gift an item to another user")
+@app_commands.describe(user="The member to gift to", item="The item to gift")
+async def gift(interaction: discord.Interaction, user: discord.Member, item: str):
+    sender = get_user_data(interaction.user.id)
+    recipient = get_user_data(user.id)
+    if item not in sender["inventory"] or sender["inventory"][item] <= 0:
+        await interaction.response.send_message("You don't have this item to gift.")
+        return
+    sender["inventory"][item] -= 1
+    if sender["inventory"][item] == 0:
+        del sender["inventory"][item]
+    recipient["inventory"][item] = recipient["inventory"].get(item, 0) + 1
+    save_data()
+    await interaction.response.send_message(f"You gifted {item} to {user.mention}!")
 
 # --- START BOT ---
 @bot.event
